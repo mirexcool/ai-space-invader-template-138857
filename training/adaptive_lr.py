@@ -3,6 +3,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from training.safety import TrainingSafetyError
 
 from stable_baselines3.common.callbacks import BaseCallback
 
@@ -58,15 +59,16 @@ class AdaptiveLRCallback(BaseCallback):
 
         self.csv_path = self.result_dir / "adaptive.csv"
 
-        with self.csv_path.open("w", newline="") as f:
-            csv.writer(f).writerow([
-                "step",
-                "scheduled_lr",
-                "actual_lr",
-                "epsilon",
-                "mode",
-                "loss",
-            ])
+        if not self.csv_path.exists():
+            with self.csv_path.open("w", newline="") as f:
+                csv.writer(f).writerow([
+                    "step",
+                    "scheduled_lr",
+                    "actual_lr",
+                    "epsilon",
+                    "mode",
+                    "loss",
+                ])
 
         print("[ADAPTIVE] Controller attached", flush=True)
 
@@ -251,8 +253,7 @@ class AdaptiveLRCallback(BaseCallback):
             self.history.append(reward)
 
             if not np.isfinite(reward):
-                print("[SAFETY] Invalid reward", flush=True)
-                return False
+                raise TrainingSafetyError("Invalid evaluation reward")
 
             if step >= self.warmup and len(results) >= 10:
 
@@ -297,7 +298,7 @@ class AdaptiveLRCallback(BaseCallback):
         if step % 5_000 == 0:
             if not self._check_finite():
                 print(
-                    "[SAFETY] NaN/Inf detected. Stopping.",
+                    "[SAFETY] NaN/Inf detected.",
                     flush=True,
                 )
                 return False

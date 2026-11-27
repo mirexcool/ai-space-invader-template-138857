@@ -14,6 +14,9 @@ from stable_baselines3.common.callbacks import (
 from training.environment import SpaceInvadersEnv
 from training.frame_stack import TemporalFrameStack
 from training.adaptive_lr import AdaptiveLRCallback
+from training.safety import SafetyCallback, TrainingSafetyError
+from training.recovery import restore_checkpoint
+from training.rotating_checkpoint import RotatingCheckpointCallback
 
 
 def main():
@@ -35,6 +38,9 @@ def main():
     parser.add_argument("--learning-rate", type=float, default=0.0003)
     parser.add_argument("--resume", type=str, default=None)
     parser.add_argument("--replay-buffer", type=str, default=None)
+    parser.add_argument(
+        "--recovery-freq", type=int, default=1_000_000
+    )
     args = parser.parse_args()
 
     torch.set_num_threads(args.threads)
@@ -134,7 +140,7 @@ def main():
             train_freq=4,
             gradient_steps=1,
             target_update_interval=1000,
-            exploration_fraction=0.3,
+            exploration_fraction=min(600_000 / args.steps, 1.0),
             exploration_initial_eps=1.0,
             exploration_final_eps=0.05,
             policy_kwargs=dict(net_arch=[64, 64]),
@@ -154,17 +160,16 @@ def main():
     )
 
     checkpoint_callback = CheckpointCallback(
-        save_freq=100_000,
+        save_freq=500_000,
         save_path=str(model_dir / "checkpoints"),
         name_prefix="dqn",
         save_replay_buffer=False,
     )
 
-    replay_callback = CheckpointCallback(
-        save_freq=1_000_000,
-        save_path=str(model_dir / "checkpoints"),
-        name_prefix="dqn",
-        save_replay_buffer=True,
+    replay_callback = RotatingCheckpointCallback(
+        save_path=model_dir / "recovery",
+        save_freq=args.recovery_freq,
+        keep=2,
     )
 
     adaptive_callback = AdaptiveLRCallback(
@@ -172,21 +177,111 @@ def main():
         model_dir=model_dir,
         result_dir=result_dir,
         base_lr=args.learning_rate,
-        warmup=int(args.steps * 0.3),
+        warmup=600_000,
     )
 
-    model.learn(
-        total_timesteps=args.steps,
-        reset_num_timesteps=not bool(args.resume),
-        callback=[
-            eval_callback,
-            checkpoint_callback,
-            replay_callback,
-            adaptive_callback,
-        ],
-        log_interval=20,
-        tb_log_name=name,
-    )
+    target_steps = model.num_timesteps + args.steps
+    rollback_count = 0
+    max_rollbacks = 3
+    reset_timesteps = not bool(args.resume)
+
+    while model.num_timesteps < target_steps:
+        remaining = target_steps - model.num_timesteps
+
+        try:
+            model.learn(
+                total_timesteps=remaining,
+                reset_num_timesteps=reset_timesteps,
+                callback=[
+                    SafetyCallback(),
+                    eval_callback,
+                    checkpoint_callback,
+                    replay_callback,
+                    adaptive_callback,
+                ],
+                log_interval=20,
+                tb_log_name=name,
+            )
+
+            if model.num_timesteps < target_steps:
+                raise TrainingSafetyError("Unexpected early stop")
+
+            break
+
+        except TrainingSafetyError as e:
+            rollback_count += 1
+
+            print(
+                f"[SAFETY] Failure at {model.num_timesteps:,}: {e}",
+                flush=True,
+            )
+
+            if rollback_count > max_rollbacks:
+                raise RuntimeError("Rollback limit exceeded") from e
+
+            failed_step = model.num_timesteps
+            old_lr = adaptive_callback.lr.value
+
+            del model
+
+            import gc
+            gc.collect()
+
+            model = restore_checkpoint(
+                model_dir,
+                env,
+                args.device,
+            )
+
+            restored_step = model.num_timesteps
+
+            adaptive_callback.mode = "normal"
+            adaptive_callback.lr.value = max(
+                adaptive_callback.min_lr,
+                old_lr * 0.5,
+            )
+            adaptive_callback.eps.value = 0.05
+            adaptive_callback.eps_attached = True
+            adaptive_callback.cooldown_until = (
+                restored_step + adaptive_callback.cooldown
+            )
+            adaptive_callback.last_improvement = restored_step
+
+            model.lr_schedule = adaptive_callback.lr
+            model.exploration_schedule = adaptive_callback.eps
+            model.exploration_rate = 0.05
+
+            if restored_step < adaptive_callback.warmup:
+                from stable_baselines3.common.utils import LinearSchedule
+
+                model.exploration_schedule = LinearSchedule(
+                    start=1.0,
+                    end=0.05,
+                    end_fraction=min(600_000 / target_steps, 1.0),
+                )
+
+                model.exploration_rate = model.exploration_schedule(
+                    1.0 - restored_step / target_steps
+                )
+
+                adaptive_callback.eps_attached = False
+
+            for cb in (
+                eval_callback,
+                checkpoint_callback,
+                replay_callback,
+                adaptive_callback,
+            ):
+                cb.n_calls = restored_step
+
+            reset_timesteps = False
+
+            print(
+                f"[ROLLBACK] Attempt {rollback_count}/{max_rollbacks} "
+                f"failed={failed_step:,} restored={restored_step:,} "
+                f"lr={adaptive_callback.lr.value:.8f}",
+                flush=True,
+            )
 
     model.save(str(model_dir / "final"))
     model.save_replay_buffer(
