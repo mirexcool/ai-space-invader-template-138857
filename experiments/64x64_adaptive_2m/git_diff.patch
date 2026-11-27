@@ -1,0 +1,52 @@
+diff --git a/pyproject.toml b/pyproject.toml
+index c5a242d..a145391 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -20,12 +20,20 @@ classifiers = [
+     "Environment :: Console",
+ ]
+ 
++[project.optional-dependencies]
++ml = [
++    "gymnasium",
++    "stable-baselines3",
++    "torch",
++    "tensorboard",
++]
++
+ [build-system]
+ requires = ["setuptools>=77"]
+ build-backend = "setuptools.build_meta"
+ 
+ [tool.setuptools]
+-packages = ["server", "agents"]
++packages = ["server", "agents", "training"]
+ 
+ [tool.setuptools.package-data]
+ server = ["viewer/*"]
+@@ -51,4 +59,4 @@ exclude = [
+     "venv",
+     ".venv",
+     "agents"
+-]
++]
+\ No newline at end of file
+diff --git a/server/logic.py b/server/logic.py
+index dfa78e9..8981f93 100644
+--- a/server/logic.py
++++ b/server/logic.py
+@@ -9,10 +9,10 @@ from typing import Any
+ import numpy as np
+ 
+ # Difficulty tuning (all values grow with the wave number and the score).
+-BASE_DIVE_SPEED = 11.0
+-MAX_DIVE_SPEED = 18.0
+-BASE_DIVE_COOLDOWN = 2.2
+-MIN_DIVE_COOLDOWN = 0.8
++BASE_DIVE_SPEED = 9.0
++MAX_DIVE_SPEED = 15.0
++BASE_DIVE_COOLDOWN = 2.5
++MIN_DIVE_COOLDOWN = 1.0
+ MAX_SIMULTANEOUS_DIVERS = 4
+ 
+ # Progressive attack patterns (unlocked cumulatively by wave).

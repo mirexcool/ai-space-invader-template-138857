@@ -220,3 +220,22 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+cat >> .gitignore <<'EOF'
+
+# Machine learning artifacts
+models/
+results/
+backups/
+*.pkl
+*.zip
+
+# Runtime artifacts
+logs/
+*.log
+*.jsonl
+__pycache__/
+.pytest_cache/
+*.egg-info/
+.DS_Store
+EOF

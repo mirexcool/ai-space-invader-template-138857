@@ -20,12 +20,20 @@ classifiers = [
     "Environment :: Console",
 ]
 
+[project.optional-dependencies]
+ml = [
+    "gymnasium",
+    "stable-baselines3",
+    "torch",
+    "tensorboard",
+]
+
 [build-system]
 requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["server", "agents"]
+packages = ["server", "agents", "training"]
 
 [tool.setuptools.package-data]
 server = ["viewer/*"]
