@@ -1,4 +1,5 @@
 import asyncio
+import sys
 import csv
 import time
 from pathlib import Path
@@ -22,7 +23,7 @@ MODEL = (
     "_quadedge_adaptive/best/best_model.zip"
 )
 
-OUT = Path("results/benchmark_64x64")
+OUT = Path("results/benchmark_rule_1000")
 OUT.mkdir(parents=True, exist_ok=True)
 
 torch.set_num_threads(1)
@@ -52,8 +53,9 @@ async def benchmark(kind, model=None):
         if kind == "rule":
             agent = RuleBasedAgent.__new__(RuleBasedAgent)
 
-            with patch("builtins.open", wraps=open) as mock:
-                mock.side_effect = lambda *a, **kw: open(
+            real_open = open
+            with patch("builtins.open") as mock:
+                mock.side_effect = lambda *a, **kw: real_open(
                     "/dev/null", "w"
                 )
                 agent.__init__("ws://localhost:8780/ws")
@@ -123,6 +125,10 @@ async def benchmark(kind, model=None):
 
 
 async def main():
+    if "--rule-only" in sys.argv:
+        await benchmark("rule")
+        return
+
     model = DQN.load(MODEL, device="cpu")
     print("Model:", MODEL)
     print("Training steps:", model.num_timesteps)

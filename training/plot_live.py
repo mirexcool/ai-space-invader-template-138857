@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--run", default=None)
+parser.add_argument("--save", action="store_true")
 args = parser.parse_args()
 
 plt.ion()
@@ -198,13 +199,6 @@ while plt.fignum_exists(fig.number):
 
                     previous = mode
 
-        axes[0].axhline(
-            3413.23,
-            linestyle="--",
-            alpha=0.5,
-            label="Rule-Based Easy",
-        )
-
         axes[0].legend(fontsize=8)
 
         axes[4].set_xlabel("Training steps (millions)")
@@ -213,6 +207,18 @@ while plt.fignum_exists(fig.number):
         fig.suptitle(root.name, fontsize=11)
         fig.tight_layout()
         fig.canvas.draw_idle()
+
+        if args.save:
+            output = root / "plots"
+            output.mkdir(exist_ok=True)
+
+            for ext in ("png", "pdf"):
+                path = output / f"training_metrics.{ext}"
+                fig.savefig(path, dpi=200, bbox_inches="tight")
+                print(f"Saved: {path}")
+
+            break
+
 
     except (
         OSError, ValueError, EOFError,

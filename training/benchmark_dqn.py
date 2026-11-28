@@ -15,12 +15,14 @@ def main():
     parser.add_argument("--games", type=int, default=1000)
     parser.add_argument("--seed-start", type=int, default=1000000)
     parser.add_argument("--threads", type=int, default=4)
+    parser.add_argument("--model", type=Path, default=None)
+    parser.add_argument("--output", type=Path, default=Path("results/dqn_benchmark"))
     args = parser.parse_args()
 
     torch.set_num_threads(args.threads)
 
     root = Path("models/dqn_progressive_f8_s5_dodge1_seed42")
-    output = Path("results/dqn_benchmark")
+    output = args.output
     output.mkdir(parents=True, exist_ok=True)
 
     models = sorted(
@@ -32,6 +34,11 @@ def main():
         root / "best/best_model.zip",
         root / "final.zip"
     ]
+
+    if args.model is not None:
+        if not args.model.is_file():
+            raise FileNotFoundError(args.model)
+        models = [args.model]
 
     env = TemporalFrameStack(
         SpaceInvadersEnv(

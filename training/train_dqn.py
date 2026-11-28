@@ -16,7 +16,24 @@ from training.frame_stack import TemporalFrameStack
 from training.adaptive_lr import AdaptiveLRCallback
 from training.safety import SafetyCallback, TrainingSafetyError
 from training.recovery import restore_checkpoint
+from training.performance_recovery import (
+    PerformanceRollback,
+    restore_performance_checkpoint,
+)
+
 from training.rotating_checkpoint import RotatingCheckpointCallback
+
+
+class FixedSeedEvalCallback(EvalCallback):
+
+    def _on_step(self):
+        if (
+            self.eval_freq > 0
+            and self.n_calls % self.eval_freq == 0
+        ):
+            self.eval_env.seed(100000)
+
+        return super()._on_step()
 
 
 def main():
@@ -150,7 +167,7 @@ def main():
             verbose=1,
         )
 
-    eval_callback = EvalCallback(
+    eval_callback = FixedSeedEvalCallback(
         eval_env,
         best_model_save_path=str(model_dir / "best"),
         log_path=str(result_dir / "eval"),
@@ -208,6 +225,81 @@ def main():
 
             break
 
+        except PerformanceRollback as e:
+
+            step = model.num_timesteps
+
+            print(
+                f"[PERFORMANCE] step={step:,}: {e}",
+                flush=True,
+            )
+
+            restore_performance_checkpoint(
+                model, model_dir
+            )
+
+            # Save restored policy as the new recovery point.
+            recovery_root = model_dir / "recovery"
+
+            import shutil
+
+            target = recovery_root / f"step_{step:012d}"
+
+            if target.exists():
+                shutil.rmtree(target)
+
+            replay_callback._save(step)
+
+            # Remove checkpoints from the discarded trajectory.
+            for checkpoint in recovery_root.glob("step_*"):
+                if checkpoint != target:
+                    shutil.rmtree(checkpoint)
+
+            print(
+                "[RECOVERY] Synchronized after performance rollback",
+                flush=True,
+            )
+
+
+            adaptive_callback.performance_rollbacks += 1
+            adaptive_callback.mode = "normal"
+            adaptive_callback.lr.value = args.learning_rate
+            adaptive_callback.eps.value = 0.05
+            adaptive_callback.eps_attached = True
+
+            adaptive_callback.degradation_since = None
+            adaptive_callback.last_improvement = step
+            adaptive_callback.cooldown_until = (
+                step + adaptive_callback.cooldown
+            )
+
+            adaptive_callback.trial_rewards.clear()
+            adaptive_callback.trial_started = None
+            adaptive_callback.history.clear()
+
+            adaptive_callback.next_parameter = (
+                "boost"
+                if adaptive_callback.next_parameter == "explore"
+                else "explore"
+            )
+
+            adaptive_callback.eval_window.clear()
+            adaptive_callback.last_eval = len(
+                eval_callback.evaluations_results
+            )
+
+            model.lr_schedule = adaptive_callback.lr
+            model.exploration_schedule = adaptive_callback.eps
+            model.exploration_rate = 0.05
+
+            reset_timesteps = False
+
+            print(
+                f"[PERFORMANCE] Recovery count="
+                f"{adaptive_callback.performance_rollbacks}",
+                flush=True,
+            )
+
         except TrainingSafetyError as e:
             rollback_count += 1
 
@@ -246,6 +338,17 @@ def main():
                 restored_step + adaptive_callback.cooldown
             )
             adaptive_callback.last_improvement = restored_step
+
+            adaptive_callback.eval_window.clear()
+            adaptive_callback.history.clear()
+            adaptive_callback.trial_rewards.clear()
+            adaptive_callback.trial_started = None
+            adaptive_callback.degradation_since = None
+
+            adaptive_callback.last_eval = len(
+                eval_callback.evaluations_results
+            )
+
 
             model.lr_schedule = adaptive_callback.lr
             model.exploration_schedule = adaptive_callback.eps
