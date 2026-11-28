@@ -1,0 +1,2 @@
+model,games,mean_score,median_score,std_score,min_score,max_score,mean_waves,mean_survival,mean_reward,wait_pct,west_pct,east_pct,shoot_pct,dodge_pct
+best_model,1000,1601.48,1810.0,611.3652014957999,200,2720,8.713,116.93246666666667,262.65030355373096,2.5405547475551415,11.194096649519068,8.653627421411903,23.87942441990733,53.732296761606555

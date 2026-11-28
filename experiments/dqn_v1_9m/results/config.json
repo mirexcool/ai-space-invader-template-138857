@@ -1,0 +1,17 @@
+{
+    "steps": 100000000,
+    "seed": 42,
+    "device": "cpu",
+    "difficulty": "progressive",
+    "frames": 8,
+    "stride": 5,
+    "dodge": true,
+    "threads": 1,
+    "shot_penalty": 0.05,
+    "ignore_score_rollback": true,
+    "gamma": 0.999,
+    "learning_rate": 5e-05,
+    "resume": null,
+    "replay_buffer": null,
+    "recovery_freq": 1000000
+}
