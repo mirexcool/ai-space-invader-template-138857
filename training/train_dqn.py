@@ -13,27 +13,14 @@ from stable_baselines3.common.callbacks import (
 
 from training.environment import SpaceInvadersEnv
 from training.frame_stack import TemporalFrameStack
-from training.adaptive_lr import AdaptiveLRCallback
+from training.adaptive_v5 import AdaptiveV5Callback
 from training.safety import SafetyCallback, TrainingSafetyError
 from training.recovery import restore_checkpoint
 from training.performance_recovery import (
     PerformanceRollback,
     restore_performance_checkpoint,
 )
-
 from training.rotating_checkpoint import RotatingCheckpointCallback
-
-
-class FixedSeedEvalCallback(EvalCallback):
-
-    def _on_step(self):
-        if (
-            self.eval_freq > 0
-            and self.n_calls % self.eval_freq == 0
-        ):
-            self.eval_env.seed(100000)
-
-        return super()._on_step()
 
 
 def main():
@@ -75,7 +62,11 @@ def main():
         f"_g{args.gamma:g}"
     )
 
-    name += f"_lr{args.learning_rate:g}_net64x64_quadedge_adaptive"
+    from datetime import datetime
+
+    name += f"_lr{args.learning_rate:g}_net64x64"
+    name += "_edge012_linear_dodge5_v5_adaptive"
+    name += datetime.now().strftime("_%Y%m%d_%H%M%S")
 
     if args.resume:
         name += f"_resume_{Path(args.resume).stem}_{args.steps}"
@@ -167,7 +158,7 @@ def main():
             verbose=1,
         )
 
-    eval_callback = FixedSeedEvalCallback(
+    eval_callback = EvalCallback(
         eval_env,
         best_model_save_path=str(model_dir / "best"),
         log_path=str(result_dir / "eval"),
@@ -189,7 +180,7 @@ def main():
         keep=2,
     )
 
-    adaptive_callback = AdaptiveLRCallback(
+    adaptive_callback = AdaptiveV5Callback(
         eval_callback=eval_callback,
         model_dir=model_dir,
         result_dir=result_dir,
@@ -199,6 +190,7 @@ def main():
 
     target_steps = model.num_timesteps + args.steps
     rollback_count = 0
+    performance_rollbacks = 0
     max_rollbacks = 3
     reset_timesteps = not bool(args.resume)
 
@@ -220,72 +212,37 @@ def main():
                 tb_log_name=name,
             )
 
+            if adaptive_callback.performance_stop:
+                print("[V5] Performance early stop")
+                break
+
             if model.num_timesteps < target_steps:
                 raise TrainingSafetyError("Unexpected early stop")
 
             break
 
         except PerformanceRollback as e:
+            performance_rollbacks += 1
 
-            step = model.num_timesteps
-
-            print(
-                f"[PERFORMANCE] step={step:,}: {e}",
-                flush=True,
-            )
+            if performance_rollbacks > 3:
+                print("[V5] Performance rollback limit reached")
+                break
 
             restore_performance_checkpoint(
                 model, model_dir
             )
 
-            # Save restored policy as the new recovery point.
-            recovery_root = model_dir / "recovery"
+            step = model.num_timesteps
 
-            import shutil
-
-            target = recovery_root / f"step_{step:012d}"
-
-            if target.exists():
-                shutil.rmtree(target)
-
-            replay_callback._save(step)
-
-            # Remove checkpoints from the discarded trajectory.
-            for checkpoint in recovery_root.glob("step_*"):
-                if checkpoint != target:
-                    shutil.rmtree(checkpoint)
-
-            print(
-                "[RECOVERY] Synchronized after performance rollback",
-                flush=True,
-            )
-
-
-            adaptive_callback.performance_rollbacks += 1
-            adaptive_callback.mode = "normal"
-            adaptive_callback.lr.value = args.learning_rate
-            adaptive_callback.eps.value = 0.05
-            adaptive_callback.eps_attached = True
-
-            adaptive_callback.degradation_since = None
+            adaptive_callback.performance_stop = False
+            adaptive_callback.critical_count = 0
+            adaptive_callback.score_history.clear()
+            adaptive_callback.pending_boost = None
             adaptive_callback.last_improvement = step
-            adaptive_callback.cooldown_until = (
-                step + adaptive_callback.cooldown
-            )
+            adaptive_callback.cooldown_until = step + 250_000
 
-            adaptive_callback.trial_rewards.clear()
-            adaptive_callback.trial_started = None
-            adaptive_callback.history.clear()
-
-            adaptive_callback.next_parameter = (
-                "boost"
-                if adaptive_callback.next_parameter == "explore"
-                else "explore"
-            )
-
-            adaptive_callback.eval_window.clear()
-            adaptive_callback.last_eval = len(
-                eval_callback.evaluations_results
+            adaptive_callback._start_v5_mode(
+                "recovery", step
             )
 
             model.lr_schedule = adaptive_callback.lr
@@ -295,10 +252,13 @@ def main():
             reset_timesteps = False
 
             print(
-                f"[PERFORMANCE] Recovery count="
-                f"{adaptive_callback.performance_rollbacks}",
+                f"[V5] Performance rollback "
+                f"{performance_rollbacks}/3 "
+                f"at step={step:,}",
                 flush=True,
             )
+
+            continue
 
         except TrainingSafetyError as e:
             rollback_count += 1
@@ -338,17 +298,6 @@ def main():
                 restored_step + adaptive_callback.cooldown
             )
             adaptive_callback.last_improvement = restored_step
-
-            adaptive_callback.eval_window.clear()
-            adaptive_callback.history.clear()
-            adaptive_callback.trial_rewards.clear()
-            adaptive_callback.trial_started = None
-            adaptive_callback.degradation_since = None
-
-            adaptive_callback.last_eval = len(
-                eval_callback.evaluations_results
-            )
-
 
             model.lr_schedule = adaptive_callback.lr
             model.exploration_schedule = adaptive_callback.eps

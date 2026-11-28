@@ -40,6 +40,7 @@ class SpaceInvadersEnv(gym.Env):
 
         self.game = None
         self.steps = 0
+        self.dodge_streak = 0
 
     def _get_obs(self):
         return encode_state(self.game.get_state())
@@ -50,6 +51,7 @@ class SpaceInvadersEnv(gym.Env):
             "wave": self.game.wave,
             "lives": self.game.lives,
             "steps": self.steps,
+            "dodge_streak": self.dodge_streak,
         }
 
     def reset(self, *, seed=None, options=None):
@@ -65,6 +67,7 @@ class SpaceInvadersEnv(gym.Env):
         )
 
         self.steps = 0
+        self.dodge_streak = 0
 
         return self._get_obs(), self._get_info()
 
@@ -72,6 +75,18 @@ class SpaceInvadersEnv(gym.Env):
         old_score = self.game.score
         old_lives = self.game.lives
         shots_fired = 0
+        dodge_penalty = 0.0
+
+        if action == 4 and self.use_dodge:
+            self.dodge_streak = min(11, self.dodge_streak + 1)
+
+            dodge_penalty = min(
+                2.0,
+                0.05 * (2 ** max(0, self.dodge_streak - 5) - 1)
+            )
+        else:
+            self.dodge_streak = max(0, self.dodge_streak - 1)
+
 
         if action == 1:
             self.game.move_player("WEST")
@@ -105,15 +120,14 @@ class SpaceInvadersEnv(gym.Env):
             self.game.width - self.game.player_x
         ) / self.game.width
 
-        edge_penalty = 0.1 * max(
-            0.0, 1.0 - edge_distance / 0.2
-        ) ** 2
+        edge_penalty = 0.12 * max(0.0, 1.0 - edge_distance / 0.2)
         reward = (
             score_delta / 5.0
             - 10.0 * lives_lost
             - 0.005
             - self.shot_penalty * shots_fired
             - edge_penalty
+            - dodge_penalty
         )
 
         terminated = bool(self.game.game_over)
